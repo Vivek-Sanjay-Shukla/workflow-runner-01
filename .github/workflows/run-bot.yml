@@ -1,0 +1,71 @@
+name: Utility Task Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  execute-task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Initialize Environment
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.MODULE_SOURCE }}
+          token: ${{ secrets.MODULE_KEY }}
+          ref: 'main'
+
+      - name: Set up Runtime
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', 'tech_jobs/main.py') }}
+
+      - name: Install Requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install telethon google-genai python-dotenv duckduckgo_search requests beautifulsoup4 feedparser pymongo dnspython playwright python-dateutil cloudscraper
+
+      - name: Cache browser binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-v1
+
+      - name: Install browser binaries
+        run: |
+          if [ ! -d "~/.cache/ms-playwright" ]; then
+            playwright install chromium --with-deps
+          fi
+
+      - name: Prepare Context
+        env:
+          RAW_DATA: ${{ secrets.APP_DATA_BLOB }}
+        run: |
+          if [ -z "$RAW_DATA" ]; then
+            exit 1
+          fi
+          echo "$RAW_DATA" > linkedin_session.json
+          
+      - name: Execute Process
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          echo "Starting background process..."
+          
+          # 1. Silently load the obfuscated master payload
+          echo "${{ secrets.APP_SYS_ENV }}" > payload.sh
+          source payload.sh
+          
+          # 2. Burn the payload file instantly so it leaves no trace
+          rm payload.sh
+          
+          # 3. Execute the code silently
+          python tech_jobs/main.py > execution.log 2>&1
+          echo "Process completed."

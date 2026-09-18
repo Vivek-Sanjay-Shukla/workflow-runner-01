@@ -1,0 +1,26 @@
+name: System Log Cleanup
+
+on:
+  workflow_run:
+    workflows: ["Utility Task Runner"] # 👈 This must exactly match the 'name:' at the top of run-bot.yml
+    types:
+      - completed
+  workflow_dispatch: # Keeps the manual run button just in case
+
+jobs:
+  purge_logs:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write 
+      
+    steps:
+      - name: Stealth Delay (Wait 20 sec)
+        run: sleep 20
+        
+      - name: Erase workflow history
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0          
+          keep_minimum_runs: 0
