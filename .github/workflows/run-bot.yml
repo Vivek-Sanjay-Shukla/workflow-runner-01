@@ -3,7 +3,6 @@ name: Utility Task Runner
 on:
   workflow_dispatch:
 
-# Added to prevent multiple runs from executing simultaneously and killing your Telethon session
 concurrency:
   group: scraper-bot-execution
   cancel-in-progress: true
@@ -11,7 +10,7 @@ concurrency:
 jobs:
   execute-task:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
 
     steps:
       - name: Initialize Environment
@@ -19,12 +18,17 @@ jobs:
         with:
           repository: ${{ secrets.MODULE_SOURCE }}
           token: ${{ secrets.MODULE_KEY }}
-          ref: "main"
 
       - name: Set up Runtime
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
+
+      - name: Cache Runtime Packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', 'tech_jobs/main.py') }}
 
       - name: Install Requirements
         run: |
@@ -36,7 +40,13 @@ jobs:
             pip install --quiet -r tech_jobs/requirements.txt
           fi
 
-      - name: Install browser binaries
+      - name: Cache Browser Binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-v1
+
+      - name: Install Browser Binaries
         run: |
           if [ ! -d "$HOME/.cache/ms-playwright" ]; then
             playwright install chromium --with-deps > /dev/null 2>&1
@@ -52,7 +62,7 @@ jobs:
           set -euo pipefail
           set +x
           umask 077
-          trap 'rm -f .env execution.log' EXIT
+          trap 'rm -f .env tech_jobs/.env execution.log' EXIT
 
           if [ -z "${APP_SYS_ENV:-}" ]; then
             exit 1
@@ -87,57 +97,63 @@ jobs:
               if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
                   parsed[key] = val
 
-          if len(parsed) < 5:
-              sys.exit(1)
-
-          # Register masks for secrets so GitHub Actions redacts them across all logs
+          # Mask all secret values in GitHub Actions logs immediately
           for k, v in parsed.items():
               os.environ[k] = v
               if len(v) >= 4 and v.lower() not in {"true", "false", "none", "null", "main"}:
                   print(f"::add-mask::{v}", flush=True)
 
-          # Ensure repository root is on PYTHONPATH for module imports
-          cur_dir = os.path.abspath(".")
-          os.environ["PYTHONPATH"] = cur_dir + os.pathsep + os.environ.get("PYTHONPATH", "")
-
-          # Write temporary .env with strict permissions
-          with open(".env", "w") as f:
-              for k, v in parsed.items():
-                  f.write(f"{k}={v}\n")
-          try:
-              os.chmod(".env", 0o600)
-          except Exception:
-              pass
-
-          target = "tech_jobs/main.py"
-          if not os.path.exists(target):
-              sys.exit(1)
-
-          log_path = "execution.log"
-          status = 1
-          try:
-              with open(log_path, "w") as log_file:
-                  proc = subprocess.run(
-                      [sys.executable, target],
-                      stdout=log_file,
-                      stderr=subprocess.STDOUT,
-                      env=os.environ,
-                  )
-                  status = proc.returncode
-          except Exception:
-              status = 1
-          finally:
-              if os.path.exists(".env"):
+          # Remove any tracked .env files so os.environ takes strict priority (matching the private workflow)
+          for env_file in [".env", os.path.join("tech_jobs", ".env")]:
+              if os.path.exists(env_file):
                   try:
-                      os.remove(".env")
+                      os.remove(env_file)
                   except Exception:
                       pass
 
+          # Strictly require Turso & core credentials before starting so the bot never runs without deduplication
+          required_keys = {
+              "API_ID",
+              "API_HASH",
+              "SESSION_STRING",
+              "BOT_TOKEN",
+              "GEMINI_KEY",
+              "MAIN_CHANNEL_ID",
+              "TURSO_DATABASE_URL",
+              "TURSO_WRITE_TOKEN",
+          }
+          missing_keys = [k for k in required_keys if not os.environ.get(k)]
+
+          log_path = "execution.log"
+          target = "tech_jobs/main.py"
+
+          if missing_keys or not os.path.exists(target):
+              with open(log_path, "w") as log_file:
+                  if missing_keys:
+                      log_file.write(f"Pre-flight check failed. Missing required keys in APP_SYS_ENV: {', '.join(missing_keys)}\n")
+                  else:
+                      log_file.write("Pre-flight check failed. Target script not found.\n")
+              status = 1
+          else:
+              cur_dir = os.path.abspath(".")
+              os.environ["PYTHONPATH"] = cur_dir + os.pathsep + os.environ.get("PYTHONPATH", "")
+              status = 1
+              try:
+                  with open(log_path, "w") as log_file:
+                      proc = subprocess.run(
+                          [sys.executable, target],
+                          stdout=log_file,
+                          stderr=subprocess.STDOUT,
+                          env=os.environ,
+                      )
+                      status = proc.returncode
+              except Exception:
+                  status = 1
+
           if status != 0:
-              # Handle failure silently and route logs to Telegram ONLY
               bot_token = os.environ.get("BOT_TOKEN")
               storage_channel = os.environ.get("STORAGE_CHANNEL_ID")
-              
+
               if bot_token and storage_channel and os.path.exists(log_path):
                   try:
                       import requests
@@ -149,18 +165,16 @@ jobs:
                               timeout=25,
                           )
                   except Exception:
-                      pass # Fails completely silently if network error occurs
+                      pass
 
-              # Clean up log immediately
               if os.path.exists(log_path):
                   try:
                       os.remove(log_path)
                   except Exception:
                       pass
 
-              sys.exit(1) # Action fails silently in GitHub console
+              sys.exit(1)
 
-          # Clean up log on success
           if os.path.exists(log_path):
               try:
                   os.remove(log_path)
