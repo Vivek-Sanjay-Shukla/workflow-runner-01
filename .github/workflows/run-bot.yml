@@ -33,7 +33,7 @@ jobs:
       - name: Install Requirements
         run: |
           python -m pip install --upgrade --quiet pip
-          pip install --quiet telethon google-genai python-dotenv duckduckgo_search requests beautifulsoup4 feedparser libsql_client certifi playwright python-dateutil cloudscraper pymysql cryptography aiohttp
+          pip install --quiet telethon groq google-genai python-dotenv duckduckgo_search requests beautifulsoup4 feedparser libsql_client certifi playwright python-dateutil cloudscraper pymysql cryptography aiohttp
           if [ -f requirements.txt ]; then
             pip install --quiet -r requirements.txt
           elif [ -f tech_jobs/requirements.txt ]; then
